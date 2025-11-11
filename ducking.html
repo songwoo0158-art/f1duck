@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My F1 Hub (v6 - Verification Fix)</title>
+    <style>
+        /* CSS는 V5와 동일 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+        }
+        h2 {
+            color: #18181b;
+        }
+        #filter-container {
+            margin-bottom: 20px;
+        }
+        .filter-btn {
+            padding: 8px 15px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 6px;
+            background-color: #ffffff;
+            color: #333;
+            cursor: pointer;
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            transition: background-color 0.2s;
+        }
+        .filter-btn:hover {
+            background-color: #e9e9ed;
+        }
+        .filter-btn.active {
+            background-color: #0d6efd;
+            color: white;
+        }
+        #shorts-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .video-item {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            transition: transform 0.2s ease;
+            cursor: pointer;
+        }
+        .video-item:hover {
+            transform: translateY(-5px);
+        }
+        .video-item img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .video-item p {
+            padding: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .video-item iframe {
+            width: 100%;
+            height: 400px;
+            border: none;
+            display: block;
+        }
+        #pagination-container {
+            text-align: center;
+            margin-top: 25px;
+        }
+        #next-page-btn {
+            padding: 10px 20px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            background-color: #0d6efd;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+            display: none;
+        }
+        #next-page-btn:hover {
+            background-color: #0b5ed7;
+        }
+    </style>
+
+    <script>
+        // 1. 여기에 발급받은 API 키를 붙여넣으세요. (파일 상단)
+        const API_KEY = 'AIzaSyDs3rdUWpFuNlsST16Do4Fb3pCn3gBf0PA';
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const shortsContainer = document.getElementById('shorts-container');
+            const filterButtons = document.querySelectorAll('.filter-btn');
+            const nextPageButton = document.getElementById('next-page-btn');
+            
+            let currentNextPageToken = null; 
+            let currentBaseUrl = ''; 
+
+            function getPublishedAfterDate(period) {
+                const date = new Date();
+                switch (period) {
+                    case 'today':
+                        date.setDate(date.getDate() - 1);
+                        break;
+                    case 'week':
+                        date.setDate(date.getDate() - 7);
+                        break;
+                    case 'month':
+                        date.setDate(date.getDate() - 30);
+                        break;
+                    case 'all':
+                    default:
+                        return null;
+                }
+                return date.toISOString(); 
+            }
+
+            function createBaseApiUrl(period) {
+                const publishedAfter = getPublishedAfterDate(period);
+                // V4의 videoEmbeddable=true 필터는 1차 방어용으로 남겨둡니다.
+                let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=F1&order=viewCount&type=video&videoDuration=short&videoEmbeddable=true&maxResults=12&key=${API_KEY}`;
+                
+                if (publishedAfter) {
+                    url += `&publishedAfter=${publishedAfter}`;
+                }
+                return url;
+            }
+
+            /**
+             * (v6) 동영상을 가져와서 표시하는 메인 함수 - 2단계 검증 추가
+             */
+            function fetchAndDisplayVideos(apiUrl, isPagination = false) {
+                if (!isPagination) {
+                    shortsContainer.innerHTML = '';
+                    currentNextPageToken = null; 
+                    nextPageButton.style.display = 'none'; 
+                }
+                
+                let searchItems = []; // 1단계 검색 결과를 저장할 변수
+
+                // --- 1단계: 검색 (Search) ---
+                fetch(apiUrl)
+                    .then(response => response.json())
+                    .then(data => {
+                        currentNextPageToken = data.nextPageToken || null;
+                        searchItems = data.items || [];
+
+                        if (searchItems.length === 0) {
+                            if (!isPagination) {
+                                shortsContainer.innerHTML = "<p>해당 기간에 영상이 없습니다.</p>";
+                            }
+                            return null; // 검증 단계로 넘어가지 않음
+                        }
+
+                        // 1단계 결과가 있으면, 2단계(검증)를 위해 ID 목록을 만듭니다.
+                        const videoIds = searchItems.map(item => item.id.videoId).join(',');
+                        const verificationUrl = `https://www.googleapis.com/youtube/v3/videos?part=status&id=${videoIds}&key=${API_KEY}`;
+                        
+                        // --- 2단계: 검증 (Videos: list) ---
+                        return fetch(verificationUrl); // 다음 then으로 fetch 결과를 넘김
+                    })
+                    .then(response => {
+                        if (response === null) return null; // 1단계에서 결과가 없었으면 중단
+                        return response.json();
+                    })
+                    .then(videoData => {
+                        if (videoData === null) return; // 1단계에서 결과가 없었으면 중단
+
+                        // 2단계: 실제 'embeddable'한 ID 목록을 Set으로 만듭니다.
+                        const embeddableIds = new Set(
+                            videoData.items
+                                .filter(item => item.status.embeddable)
+                                .map(item => item.id)
+                        );
+
+                        // --- 3단계: 1단계 결과(searchItems)를 2단계(embeddableIds)로 필터링 ---
+                        const displayItems = searchItems.filter(item => 
+                            embeddableIds.has(item.id.videoId)
+                        );
+
+                        // '다음' 버튼 표시 로직 (필터링 후에도 다음 페이지 토큰은 유효함)
+                        if (currentNextPageToken) {
+                            nextPageButton.style.display = 'block';
+                        } else {
+                            nextPageButton.style.display = 'none';
+                        }
+
+                        // 최종 필터링된 결과가 없는 경우
+                        if (displayItems.length === 0) {
+                            if (!isPagination) {
+                                shortsContainer.innerHTML = "<p>해당 기간에 (재생 가능한) 영상이 없습니다.</p>";
+                            }
+                            // '다음' 버튼이 표시되었더라도, 더 이상 로드할 게 없으면 숨길 수 있음
+                            // (단, 다음 페이지엔 있을 수 있으니 일단 둠)
+                            return;
+                        }
+
+                        // 4. HTML 생성 (최종 필터링된 영상만)
+                        displayItems.forEach(item => {
+                            const videoId = item.id.videoId;
+                            const title = item.snippet.title;
+                            const thumbnail = item.snippet.thumbnails.medium.url;
+
+                            const videoElement = `
+                                <div class="video-item" data-videoid="${videoId}">
+                                    <img src="${thumbnail}" alt="${title}">
+                                    <p>${title}</p>
+                                </div>
+                            `;
+                            shortsContainer.innerHTML += videoElement;
+                        });
+                    })
+                    .catch(error => {
+                        console.error('유튜브 API 호출 중 오류 발생:', error);
+                        shortsContainer.innerHTML = "<p>콘텐츠를 불러오는 데 실패했습니다.</p>";
+                    });
+            }
+
+            // --- V5와 동일한 이벤트 리스너들 ---
+
+            filterButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                    this.classList.add('active');
+
+                    const period = this.dataset.period;
+                    currentBaseUrl = createBaseApiUrl(period);
+                    
+                    fetchAndDisplayVideos(currentBaseUrl, false);
+                });
+            });
+
+            nextPageButton.addEventListener('click', function() {
+                if (currentNextPageToken && currentBaseUrl) {
+                    const nextPageUrl = `${currentBaseUrl}&pageToken=${currentNextPageToken}`;
+                    fetchAndDisplayVideos(nextPageUrl, true);
+                }
+            });
+
+            shortsContainer.addEventListener('click', function(event) {
+                const videoItem = event.target.closest('.video-item');
+
+                if (videoItem) {
+                    if (videoItem.querySelector('iframe')) {
+                        return;
+                    }
+
+                    const videoId = videoItem.dataset.videoid;
+                    videoItem.innerHTML = `
+                        <iframe 
+                            src="https://www.youtube.com/embed/${videoId}?autoplay=1" 
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                            allowfullscreen>
+                        </iframe>
+                    `;
+                    videoItem.style.transform = 'none';
+                    videoItem.style.boxShadow = '0 4px 10px rgba(0, 0, 0, 0.2)';
+                }
+            });
+
+            // 페이지 첫 로드 시 기본값 설정
+            document.querySelector('.filter-btn[data-period="week"]').click();
+        });
+    </script>
+</head>
+<body>
+
+    <h2>🏎️ F1 숏폼</h2>
+
+    <div id="filter-container">
+        <button class="filter-btn" data-period="today">오늘</button>
+        <button class="filter-btn active" data-period="week">일주일</button>
+        <button class="filter-btn" data-period="month">한달</button>
+        <button class="filter-btn" data-period="all">올타임</button>
+    </div>
+    
+    <div id="shorts-container"></div>
+
+    <div id="pagination-container">
+        <button id="next-page-btn">다음 12개 보기</button>
+    </div>
+
+</body>
+</html>
